@@ -1,19 +1,45 @@
 import pandas as pd
 import numpy as np
 import functools
-from sklearn.metrics.pairwise import pairwise_distances
-from sklearn.cluster import KMeans
+import jieba
+from tqdm import tqdm
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.mixture import GaussianMixture
+
+class bag_of_words:
+    ##require pandas DataFrame
+    def __init__(self, company_list, company_disc):
+        assert len(company_list) == company_disc.shape[0]
+        self.company_list = company_list.copy()
+        self.company_disc = company_disc.copy()
+        self.word_embedding = None
+
+    def transform(self, stopwords, use_tfidf=True):
+        words = self.company_disc.apply(lambda x: " ".join(jieba.cut(x)))
+        cv = CountVectorizer(stop_words=stopwords)
+        word_embedding = cv.fit_transform(words)
+        if use_tfidf:
+            tf = TfidfTransformer()
+            word_embedding = tf.fit_transform(word_embedding)
+        self.word_embedding = pd.concat(
+            [self.company_list, pd.DataFrame(word_embedding.toarray())], axis=1
+        )
+
+    def get_vector(self):
+        return self.word_embedding
 
 
-class paper_sim:
+class paper_cluster:
     def __init__(self, company_list, company_vec):
         assert len(company_list) == company_vec.shape[0]
         self.company_list = company_list.copy()
-        self.cosine_matrix = pairwise_distances(
-            company_vec, metric="cosine", n_jobs=-1)
+        self.cosine_matrix = cosine_similarity(company_vec)
         self.cluster_dict = dict()
-        self.name='paper_class'
-        self.paper_class=None
+        self.name = "paper_class"
+        self.paper_class = None
 
     def generate_clusters(self, n_clusters=10, adjusted_coef=1):
 
@@ -44,18 +70,17 @@ class paper_sim:
         set_num_counter = list(range(max_num))
         exempt_set = set()
         record_dummy = -1
+        for i in range(max_num):
+            cov_matrix_enlarge[i, i] = 0
+
         while len(set(set_num_counter)) > n_clusters:
             # get minimun correlation in the matrix
             min_pair = cov_matrix_enlarge.argmax()
             row = min_pair // cov_matrix_enlarge.shape[0]
             col = min_pair % cov_matrix_enlarge.shape[0]
             enlarge_company_list.append([row, col])
-            if row == col:
-                cov_matrix_enlarge[row, col] = 0
-                continue
             # calculate the new generated industry correlation with other companies
-            ind_comp_list = [i for i in query_ind(
-                row)] + [i for i in query_ind(col)]
+            ind_comp_list = [i for i in query_ind(row)] + [i for i in query_ind(col)]
             for i in ind_comp_list:
                 exempt_set.add(i)
             exempt_set.add(row)
@@ -77,14 +102,12 @@ class paper_sim:
                     )
                 elif not if_exempt:
                     sum_corr = sum(
-                        [sum_corr_func(i1, iter_company)
-                         for i1 in ind_comp_list]
+                        [sum_corr_func(i1, iter_company) for i1 in ind_comp_list]
                     ) / len(ind_comp_list)
                 else:
                     sum_corr = 0
                 new_corr.append(sum_corr)
-            cov_matrix_enlarge = np.vstack(
-                (cov_matrix_enlarge, np.matrix(new_corr)))
+            cov_matrix_enlarge = np.vstack((cov_matrix_enlarge, np.matrix(new_corr)))
             cov_matrix_enlarge = np.hstack(
                 (cov_matrix_enlarge, np.transpose(np.matrix(new_corr + [0])))
             )
@@ -107,9 +130,9 @@ class paper_sim:
             [(name, key) for name in item]
             for key, item in zip(new_sequence_num, self.cluster_dict.values())
         ]
-        paper_class = functools.reduce(lambda x, y: x+y, paper_class)
-        paper_class = pd.DataFrame(paper_class, columns=[
-                                   "company", "paper_class"])
+        paper_class = functools.reduce(lambda x, y: x + y, paper_class)
+        paper_class = pd.DataFrame(paper_class, columns=["company", "paper_class"])
+        self.paper_class = paper_class
 
     def output_clusters_df(self):
         return self.paper_class
@@ -118,18 +141,92 @@ class paper_sim:
         return self.cluster_dict
 
 
-class ML_clustering:
+class ML_cluster:
+    def __init__(self, embedding, namelist):
+        self.embedding = embedding
+        self.namelist = namelist
+        self.cluster_df = None
+        self.name = None
+        self.embedding_type=["kmean", "dbscan", "gmm"]
+        self.how=["org", "cor", "cos"]
 
-    def __init__(self,BERT_short,BERT_namelist,type,n_clusters=10):
-        assert type in ['kmean']
-        if type == 'kmean':
-            # another comparable model: k-means model
-            estimator=KMeans(n_clusters=n_clusters)
-            estimator.fit(BERT_short)
+    def generate_clusters(
+        self,
+        embedding_type,
+        how="org",
+        n_clusters=10,
+        random_state=None,
+        DBSCAN_eps=0.5,
+        DBSCAN_min_samples=5,
+        DBSCAN_metric="cosine"
+    ):
+        assert how in ["org", "cor", "cos"]
+        assert embedding_type in ["kmean", "dbscan", "gmm"]
+        if how == "cor":
+            train_matrix = np.corrcoef(self.embedding)
+        elif how == "cos":
+            train_matrix = cosine_similarity(self.embedding, dense_output=False)
+        else:
+            train_matrix = self.embedding
+
+        if embedding_type == "kmean":
+            # k-means model
+            estimator = KMeans(n_clusters=n_clusters, random_state=random_state)
+            estimator.fit(train_matrix)
             label_pred = estimator.labels_
-            self.cluster_df = pd.DataFrame(zip([i for i in BERT_namelist], label_pred), columns=['company', 'kmean_class'])
-            self.name='kmean_class'
-            
-    
+            self.name = "kmean_class"
+        elif embedding_type == "dbscan":
+            # DBSCAN model
+            estimator = DBSCAN(
+                eps=DBSCAN_eps, min_samples=DBSCAN_min_samples, metric=DBSCAN_metric
+            )
+            estimator.fit(train_matrix)
+            label_pred = estimator.labels_
+            self.name = "DBSCAN_class"
+        elif embedding_type == "gmm":
+            # gmm model
+            estimator = GaussianMixture(n_components=n_clusters,random_state=random_state)
+            label_pred = estimator.fit_predict(train_matrix)
+            self.name = "gmm_class"
+        self.cluster_df = pd.DataFrame(
+            zip([i for i in self.namelist], label_pred), columns=["company", self.name]
+        )
+
     def output_clusters_df(self):
         return self.cluster_df
+
+class get_all_cluster:
+    def __init__(self,company_list,embadding_list):
+        '''
+        embadding_list: [embadding of first method, second method, ...]
+        company_list and embadding of X method is a DataFrame or array. They Must have the same rank
+        you can get embadding_list through combine_model.combine_embadding
+        '''
+        self.embadding_list=embadding_list
+        self.company_list=company_list
+        self.all_cluster=pd.DataFrame(company_list,columns=['company'])
+    def get_all_cluster(self,
+        n_cluster,
+        random_state=None,
+        use_DBSCAN=False,
+        DBSCAN_eps=0.5,
+        DBSCAN_min_samples=5,
+        DBSCAN_metric="cosine"):
+        i=0
+        for embadding in tqdm(self.embadding_list,unit='per embadding',desc='handling...'):
+            i+=1
+            cluster=ML_cluster(embadding,self.company_list)
+            for how in cluster.how:
+                for method in cluster.embedding_type:
+                    if use_DBSCAN and method=='dbscan':
+                        cluster.generate_clusters(embedding_type=method,how=how,n_clusters=n_cluster)
+                        df_i=cluster.output_clusters_df()
+                        self.all_cluster[str(i)+'th embadding with '+how+' '+method]=df_i.iloc[:,-1]
+                    elif method!='dbscan':
+                        cluster.generate_clusters(embedding_type=method,how=how,n_clusters=n_cluster)
+                        df_i=cluster.output_clusters_df()
+                        self.all_cluster[str(i)+'th embadding with '+how+' '+method]=df_i.iloc[:,-1]
+                    else:
+                        continue
+        return self.all_cluster
+

@@ -1,10 +1,12 @@
 from sklearn.decomposition import PCA, TruncatedSVD
 import pandas as pd
+import copy
 from combine_models import *
 
 
 def compute_pca_svd(input_combine_models, cosine_matrix, type='pca'):
     assert type in ['pca', 'svd']
+    combine_models=copy.deepcopy(input_combine_models)
     if type == 'pca':
         pca = PCA(n_components=2)
         reduced_cov = pd.DataFrame(pca.fit_transform(
