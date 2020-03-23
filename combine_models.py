@@ -117,7 +117,6 @@ class performance_analysis:
             reducted_vector=pd.DataFrame(pca.fit_transform(matrix))
             self.class_df=pd.concat([self.class_df,reducted_vector],axis=1)
     
-
     def plot_reducted_classification(self):
         self.class_df.iloc[:,1:]=self.class_df.iloc[:,1:].astype('category')
         if self.class_df.shape[1]==self.class_len+1:
