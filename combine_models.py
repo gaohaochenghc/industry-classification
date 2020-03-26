@@ -117,6 +117,7 @@ class performance_analysis:
             reducted_vector=pd.DataFrame(pca.fit_transform(matrix))
             self.class_df=pd.concat([self.class_df,reducted_vector],axis=1)
     
+
     def plot_reducted_classification(self):
         self.class_df.iloc[:,1:]=self.class_df.iloc[:,1:].astype('category')
         if self.class_df.shape[1]==self.class_len+1:
@@ -128,20 +129,19 @@ class performance_analysis:
                 ax[j,i].set_title(self.class_df.columns[j+1]+' with the '+str(i)+'th embadding')
 
 
-
-
-    def get_daliy_return(self):
+    def get_daliy_return(self,threshold=5):
         self.return_map={}
-        pivot_df=self.stock_return.pivot(columns='company',values='return')
+        pivot_df=self.stock_return[self.stock_return['company'].isin(self.class_df['company'])].pivot(index='date',columns='company',values='return')
+        class_df_trim=self.class_df[self.class_df['company'].isin(self.stock_return['company'])]
         for name in self.method:
-            mean_return=self.stock_return.groupby(by=[name,'date']).mean()['return']
-            self.return_map[name]={clas:pd.DataFrame(mean_return[clas,]).dropna() for clas in mean_return.index.levels[0]}
-            for company in self.company:
-                ind=self.company2int[name][company]
-                company_return=self.stock_return[self.stock_return['company']==company][['date','return']].set_index('date').rename(columns={'return':company})
-                if company_return.shape[0]==0:
-                    continue
-                self.return_map[name][ind]=self.return_map[name][ind].join(company_return)
+            self.return_map[name]=dict()
+            cluster_namelist=set(class_df_trim[name].values.tolist())
+            int2comp={cl:class_df_trim[class_df_trim[name]==cl]['company'] for cl in cluster_namelist}
+            for cl,comps in int2comp.items():
+                if len(comps)>threshold:
+                    self.return_map[name][cl]=pivot_df[comps]
+                    self.return_map[name][cl].dropna(1,'all',inplace=True)
+                    self.return_map[name][cl]['return']=self.return_map[name][cl].mean(1)
         
     def get_statistical_discribe(self):
         if self.return_map==None:

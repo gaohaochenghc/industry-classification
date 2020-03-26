@@ -194,6 +194,14 @@ class ML_cluster:
 
     def output_clusters_df(self):
         return self.cluster_df
+    
+    
+class DEC_cluster:
+    def __init__(self, embedding, namelist, cluster_df):
+        self.embedding = embedding
+        self.namelist = namelist
+        self.cluster_df = cluster_df
+        self.name = 'DEC'
 
 class get_all_cluster:
     def __init__(self,company_list,embadding_list):
